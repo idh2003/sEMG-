@@ -19,13 +19,6 @@ sEMG는 근육의 활성 과정에서 발생하는 전기적 신호를 측정한
 5. 대응표본 t-검정으로 모델 간 성능 차이의 통계적 유의성을 확인한다.
 6. 학습 시간과 추론 시간을 측정하여 모델 선택에 필요한 계산 비용을 비교한다.
 
-### 1.2 실행코드
-import numpy as np
-from sklearn.svm import SVC
-from sklearn.preprocessing import LabelEncoder
-from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
-
 # 1. 데이터셋 불러오기
 d = np.load("step5_dataset.npz", allow_pickle=True)
 
