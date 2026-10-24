@@ -19,6 +19,478 @@ sEMG는 근육의 활성 과정에서 발생하는 전기적 신호를 측정한
 5. 대응표본 t-검정으로 모델 간 성능 차이의 통계적 유의성을 확인한다.
 6. 학습 시간과 추론 시간을 측정하여 모델 선택에 필요한 계산 비용을 비교한다.
 
+### 1.2 실행코드
+import numpy as np
+from sklearn.svm import SVC
+from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+
+# 1. 데이터셋 불러오기
+d = np.load("step5_dataset.npz", allow_pickle=True)
+
+Xtr = d["Xtr"]
+ytr = d["ytr"]
+Xte = d["Xte"]
+yte = d["yte"]
+
+print("학습 데이터:", Xtr.shape)
+print("학습 라벨:", ytr.shape)
+print("테스트 데이터:", Xte.shape)
+print("테스트 라벨:", yte.shape)
+
+# 2. 라벨을 정수로 변환
+le = LabelEncoder()
+ytr = le.fit_transform(ytr)
+yte = le.transform(yte)
+
+# 3. 세 가지 모델 정의
+models = {
+    "SVM": SVC(
+        kernel="rbf",
+        C=1.0,
+        gamma="scale",
+        decision_function_shape="ovr"
+    ),
+
+    "RF": RandomForestClassifier(
+        n_estimators=100,
+        random_state=42,
+        n_jobs=-1
+    ),
+
+    "XGB": XGBClassifier(
+        n_estimators=400,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.9,
+        colsample_bytree=0.8,
+        random_state=42,
+        eval_metric="mlogloss",
+        n_jobs=-1
+    )
+}
+
+# 4. 세 모델 학습
+for name, model in models.items():
+    model.fit(Xtr, ytr)
+    print(name, "학습 완료")
+
+print("세 모델 학습이 모두 끝났습니다.")
+
+# ======================================
+
+# 3주차 실습 2단계: Hold-out 평가
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score
+)
+import pandas as pd
+
+rows = []
+
+for k, m in models.items():
+    # 테스트 데이터 예측
+    p = m.predict(Xte)
+
+    # 네 가지 평가 지표 계산
+    rows.append([
+        k,
+        accuracy_score(yte, p),
+        precision_score(yte, p, average="macro", zero_division=0),
+        recall_score(yte, p, average="macro", zero_division=0),
+        f1_score(yte, p, average="macro", zero_division=0)
+    ])
+
+# 평가 결과를 표로 만들기
+df = pd.DataFrame(
+    rows,
+    columns=["model", "acc", "precision", "recall", "f1"]
+)
+
+print("\n===== Hold-out 평가 결과 =====")
+print(df.round(4).to_string(index=False))
+
+# ===========================================
+
+
+# ===== 실습 3단계: 혼동행렬 시각화 =====
+
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+
+L = le.classes_  # 실제 인코딩 순서
+
+# RF 모델의 테스트 데이터 예측
+pred = models["RF"].predict(Xte)
+
+# 혼동행렬 계산
+cm = confusion_matrix(
+    yte,
+    pred,
+    labels=np.arange(len(L))
+)
+
+# 그래프 작성
+fig, ax = plt.subplots(figsize=(8, 6))
+im = ax.imshow(cm, cmap="Blues")
+
+ax.set_xticks(range(len(L)))
+ax.set_xticklabels(L, rotation=45, ha="right")
+ax.set_yticks(range(len(L)))
+ax.set_yticklabels(L)
+
+ax.set_xlabel("Predicted label")
+ax.set_ylabel("True label")
+ax.set_title("RF Confusion Matrix")
+
+# 각 칸에 개수 표시
+for i in range(len(L)):
+    for j in range(len(L)):
+        if cm[i, j] != 0:
+            ax.text(
+                j, i, cm[i, j],
+                ha="center",
+                va="center",
+                fontsize=8
+            )
+
+plt.colorbar(im, ax=ax)
+plt.tight_layout()
+
+# 이미지 파일 저장
+plt.savefig("confusion8.png", dpi=120)
+plt.show()
+
+print("혼동행렬 저장 완료: confusion8.png")
+
+# ==========================================
+
+# ===== 실습 4단계: 5-fold 교차검증 =====
+
+
+from sklearn.model_selection import StratifiedKFold
+from sklearn.base import clone
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score
+
+# 저장된 학습 데이터(Xtr, ytr)를 이용한 5-fold 교차검증
+skf = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=42
+)
+
+fold_acc = {k: [] for k in models}
+
+for tr_i, va_i in skf.split(Xtr, ytr):
+
+    # 학습 데이터와 검증 데이터 분리
+    Xa, Xb = Xtr[tr_i], Xtr[va_i]
+    ya, yb = ytr[tr_i], ytr[va_i]
+
+    # 학습 데이터 기준으로 표준화
+    sc = StandardScaler()
+    Xa = sc.fit_transform(Xa)
+    Xb = sc.transform(Xb)
+
+    # 각 모델을 독립적으로 학습하고 평가
+    for k, proto in models.items():
+        m = clone(proto)
+        m.fit(Xa, ya)
+        pred = m.predict(Xb)
+
+        acc = accuracy_score(yb, pred)
+        fold_acc[k].append(acc)
+
+# 평균 정확도와 표준편차 출력
+print("\n===== 5-fold 교차검증 결과 =====")
+
+for k, v in fold_acc.items():
+    print(
+        f"{k}: "
+        f"{np.mean(v) * 100:.2f} ± "
+        f"{np.std(v) * 100:.2f} %"
+    )
+
+# ==========================================
+
+# ===== 실습 5단계: 통계 검정 =====
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.base import clone
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import StratifiedKFold
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    classification_report
+)
+
+from xgboost import XGBClassifier
+from scipy.stats import ttest_rel
+from itertools import combinations
+
+
+# ==================================================
+# 1단계: 데이터 불러오기
+# ==================================================
+
+print("===== 1단계: 데이터 불러오기 =====")
+
+data = np.load("step5_dataset.npz", allow_pickle=True)
+
+Xtr = data["Xtr"]
+ytr = data["ytr"]
+Xte = data["Xte"]
+yte = data["yte"]
+
+print("학습 데이터:", Xtr.shape)
+print("학습 라벨:", ytr.shape)
+print("테스트 데이터:", Xte.shape)
+print("테스트 라벨:", yte.shape)
+
+
+# ==================================================
+# 2단계: 라벨 인코딩
+# ==================================================
+
+print("\n===== 2단계: 라벨 인코딩 =====")
+
+le = LabelEncoder()
+
+ytr = le.fit_transform(ytr)
+yte = le.transform(yte)
+
+num_classes = len(le.classes_)
+
+print("클래스:", le.classes_)
+print("클래스 수:", num_classes)
+
+
+# ==================================================
+# 3단계: 모델 정의 및 학습
+# ==================================================
+
+print("\n===== 3단계: 모델 학습 및 평가 =====")
+
+models = {
+    "SVM": make_pipeline(
+        StandardScaler(),
+        SVC(kernel="rbf", random_state=42)
+    ),
+
+    "RF": RandomForestClassifier(
+        n_estimators=100,
+        random_state=42,
+        n_jobs=-1
+    ),
+
+    "XGB": XGBClassifier(
+        n_estimators=100,
+        random_state=42,
+        eval_metric="mlogloss",
+        n_jobs=-1
+    )
+}
+
+test_results = {}
+
+for name, model in models.items():
+    print(f"\n--- {name} 학습 ---")
+
+    model.fit(Xtr, ytr)
+    pred = model.predict(Xte)
+
+    acc = accuracy_score(yte, pred)
+    prec = precision_score(
+        yte, pred, average="weighted", zero_division=0
+    )
+    rec = recall_score(
+        yte, pred, average="weighted", zero_division=0
+    )
+    f1 = f1_score(
+        yte, pred, average="weighted", zero_division=0
+    )
+
+    test_results[name] = {
+        "accuracy": acc,
+        "precision": prec,
+        "recall": rec,
+        "f1": f1
+    }
+
+    print(f"Accuracy : {acc * 100:.2f}%")
+    print(f"Precision: {prec:.4f}")
+    print(f"Recall   : {rec:.4f}")
+    print(f"F1-score : {f1:.4f}")
+
+    print("\n분류 보고서:")
+    print(
+        classification_report(
+            yte,
+            pred,
+            labels=np.arange(num_classes),
+            target_names=[str(c) for c in le.classes_],
+            zero_division=0
+        )
+    )
+
+
+# ==================================================
+# 4단계: 5-fold 교차검증
+# ==================================================
+
+print("\n===== 4단계: 5-fold 교차검증 =====")
+
+skf = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=42
+)
+
+fold_acc = {name: [] for name in models}
+
+for fold, (tr_i, va_i) in enumerate(skf.split(Xtr, ytr), start=1):
+    Xa, Xb = Xtr[tr_i], Xtr[va_i]
+    ya, yb = ytr[tr_i], ytr[va_i]
+
+    print(f"\n--- Fold {fold} ---")
+
+    for name, prototype in models.items():
+        model = clone(prototype)
+
+        model.fit(Xa, ya)
+        pred = model.predict(Xb)
+
+        acc = accuracy_score(yb, pred)
+        fold_acc[name].append(acc)
+
+        print(f"{name}: {acc * 100:.2f}%")
+
+print("\n===== 교차검증 평균 정확도 =====")
+
+for name, scores in fold_acc.items():
+    mean_acc = np.mean(scores) * 100
+    std_acc = np.std(scores) * 100
+
+    print(
+        f"{name}: {mean_acc:.2f} ± {std_acc:.2f}%"
+    )
+
+
+# ==================================================
+# 5단계: 통계 검정
+# ==================================================
+
+print("\n===== 5단계: 대응표본 t-검정 =====")
+
+alpha = 0.05
+
+for a, b in combinations(models.keys(), 2):
+    scores_a = np.asarray(fold_acc[a])
+    scores_b = np.asarray(fold_acc[b])
+
+    t, p = ttest_rel(scores_a, scores_b)
+
+    if not np.isfinite(p):
+        print(f"{a} vs {b}: 검정 불가")
+        continue
+
+    verdict = "유의함" if p < alpha else "유의하지 않음"
+
+    print(
+        f"{a} vs {b}: "
+        f"t = {t:.4f}, p = {p:.4f} ({verdict})"
+    )
+
+
+# ==================================================
+# 6단계: Random Forest 혼동행렬 저장
+# ==================================================
+
+print("\n===== 6단계: 혼동행렬 저장 =====")
+
+rf_model = clone(models["RF"])
+rf_model.fit(Xtr, ytr)
+rf_pred = rf_model.predict(Xte)
+
+cm = confusion_matrix(
+    yte,
+    rf_pred,
+    labels=np.arange(num_classes)
+)
+
+disp = ConfusionMatrixDisplay(
+    confusion_matrix=cm,
+    display_labels=le.classes_
+)
+
+disp.plot(cmap="Blues", xticks_rotation=45)
+plt.title("Random Forest Confusion Matrix")
+plt.tight_layout()
+plt.savefig("confusion8.png", dpi=300)
+plt.show()
+
+print("혼동행렬 저장 완료: confusion8.png")
+print("\n모든 단계가 완료되었습니다.")
+
+# =======================================
+
+
+# ==================================================
+# 6단계: 계산 비용과 리포트
+# ==================================================
+
+import time
+
+print("\n===== 6단계: 계산 비용 측정 =====")
+
+timing_results = {}
+
+for k, m in models.items():
+
+    # 학습 시간 측정
+    t0 = time.time()
+    m.fit(Xtr, ytr)
+    train_t = time.time() - t0
+
+    # 추론 시간 측정
+    n_repeat = 100
+
+    t0 = time.time()
+    for _ in range(n_repeat):
+        m.predict(Xte[:1])
+
+    elapsed = time.time() - t0
+
+    # 100회 실행한 1개 샘플 추론의 평균 시간(ms)
+    infer_ms = (elapsed / n_repeat) * 1000
+
+    timing_results[k] = {
+        "train_time": train_t,
+        "infer_ms": infer_ms
+    }
+
+    print(
+        f"{k}: 학습 {train_t:.3f}s, "
+        f"추론 {infer_ms:.3f} ms/sample"
+    )
+
+print("\n===== 계산 비용 측정 완료 =====")
+
 ## 2. 데이터 및 전처리
 
 ### 2.1 데이터셋 구성
